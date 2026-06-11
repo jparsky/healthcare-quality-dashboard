@@ -20,6 +20,12 @@ The goal is to support clear, actionable review of healthcare quality data for p
 - Compares hospital type performance
 - Provides a searchable hospital detail table
 - Allows users to download the filtered hospital table as a CSV
+- - Integrates CMS Hospital General Information, HCAHPS patient experience, and Unplanned Hospital Visits datasets
+- Displays stakeholder-facing summary insights based on selected filters
+- Flags potential quality-improvement opportunities using overall ratings, patient experience ratings, missing data, and worse-than-national outcome measures
+- Visualizes unplanned visit/readmission measures compared to national performance
+- Summarizes worse-than-national outcome measures by state and measure group
+- Provides downloadable filtered hospital data and quality opportunity flag tables
 
 ## Tech Stack
 
@@ -33,13 +39,11 @@ The goal is to support clear, actionable review of healthcare quality data for p
 
 This project uses public hospital quality data from the CMS Provider Data Catalog.
 
-Current dataset:
+Required local data files:
 
-- Hospital General Information
-
-The raw CMS CSV file is not included in this repository because public datasets may be large and are periodically updated by CMS.
-
-To run the project locally, download the Hospital General Information CSV from the CMS Provider Data Catalog and save it here:
+- data/raw/Hospital_General_Information.csv
+- data/raw/HCAHPS_Hospital.csv
+- data/raw/Unplanned_Hospital_Visits_Hospital.csv
 
 ```text
 data/raw/Hospital_General_Information.csv
