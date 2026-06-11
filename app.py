@@ -12,345 +12,118 @@ st.set_page_config(
     layout="wide",
 )
 
-HOSPITAL_GENERAL_INFO_PATH = Path("data/raw/Hospital_General_Information.csv")
-HCAHPS_PATH = Path("data/raw/HCAHPS_Hospital.csv")
-UNPLANNED_VISITS_PATH = Path("data/raw/Unplanned_Hospital_Visits_Hospital.csv")
+PROCESSED_DIR = Path("data/processed")
+
+HOSPITALS_PROCESSED_PATH = PROCESSED_DIR / "hospitals_processed.csv"
+HCAHPS_FACILITY_SUMMARY_PATH = PROCESSED_DIR / "hcahps_facility_summary.csv"
+HCAHPS_MEASURES_PATH = PROCESSED_DIR / "hcahps_measures_processed.csv"
+UNPLANNED_FACILITY_SUMMARY_PATH = PROCESSED_DIR / "unplanned_facility_summary.csv"
+UNPLANNED_MEASURES_PATH = PROCESSED_DIR / "unplanned_measures_processed.csv"
 
 
 # -----------------------------
-# Data loading and cleaning
+# Data loading
 # -----------------------------
 
 @st.cache_data(show_spinner=True)
-def load_csv(path: Path) -> pd.DataFrame:
+def load_processed_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, dtype=str)
 
 
-def clean_rating(value):
-    if pd.isna(value):
-        return np.nan
-
-    text = str(value).strip()
-
-    if text.lower() in {
-        "not available",
-        "not applicable",
-        "not enough information",
-        "",
-        "nan",
-    }:
-        return np.nan
-
-    try:
-        return float(text)
-    except ValueError:
-        return np.nan
+def coerce_numeric_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    for col in columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
 
 
-def clean_percent(value):
-    if pd.isna(value):
-        return np.nan
+def require_processed_files():
+    required_files = [
+        HOSPITALS_PROCESSED_PATH,
+        HCAHPS_FACILITY_SUMMARY_PATH,
+        HCAHPS_MEASURES_PATH,
+        UNPLANNED_FACILITY_SUMMARY_PATH,
+        UNPLANNED_MEASURES_PATH,
+    ]
 
-    text = str(value).strip().replace("%", "")
+    missing = [path for path in required_files if not path.exists()]
 
-    if text.lower() in {
-        "not available",
-        "not applicable",
-        "not enough information",
-        "",
-        "nan",
-    }:
-        return np.nan
-
-    try:
-        return float(text)
-    except ValueError:
-        return np.nan
-
-
-def clean_number(value):
-    if pd.isna(value):
-        return np.nan
-
-    text = str(value).strip().replace(",", "")
-
-    if text.lower() in {
-        "not available",
-        "not applicable",
-        "not enough information",
-        "",
-        "nan",
-    }:
-        return np.nan
-
-    try:
-        return float(text)
-    except ValueError:
-        return np.nan
-
-
-def require_columns(df: pd.DataFrame, required_columns: list[str], dataset_name: str):
-    missing = [col for col in required_columns if col not in df.columns]
     if missing:
         st.error(
-            f"{dataset_name} is missing expected columns: {', '.join(missing)}. "
-            "Check that the correct CMS CSV file was downloaded."
+            "Processed data files are missing. Run the preprocessing script locally "
+            "before launching or deploying the dashboard."
         )
-        with st.expander(f"Columns found in {dataset_name}"):
-            st.write(list(df.columns))
+        st.code("py scripts/build_processed_data.py", language="bash")
+        st.write("Missing files:")
+        for path in missing:
+            st.write(f"- `{path}`")
         st.stop()
 
 
-def load_and_clean_data():
-    if not HOSPITAL_GENERAL_INFO_PATH.exists():
-        st.error(
-            "Hospital General Information CSV not found. "
-            "Download the CMS Hospital General Information file and save it as "
-            "`data/raw/Hospital_General_Information.csv`."
-        )
-        st.stop()
+def load_data():
+    require_processed_files()
 
-    hospitals = load_csv(HOSPITAL_GENERAL_INFO_PATH)
-    hospitals.columns = hospitals.columns.str.strip()
+    hospitals = load_processed_csv(HOSPITALS_PROCESSED_PATH)
+    hcahps_facility_summary = load_processed_csv(HCAHPS_FACILITY_SUMMARY_PATH)
+    hcahps_measures = load_processed_csv(HCAHPS_MEASURES_PATH)
+    unplanned_facility_summary = load_processed_csv(UNPLANNED_FACILITY_SUMMARY_PATH)
+    unplanned_measures = load_processed_csv(UNPLANNED_MEASURES_PATH)
 
-    require_columns(
+    hospitals = coerce_numeric_columns(
         hospitals,
+        ["Hospital overall rating numeric"],
+    )
+
+    hcahps_facility_summary = coerce_numeric_columns(
+        hcahps_facility_summary,
         [
-            "Facility ID",
-            "Facility Name",
-            "State",
-            "Hospital Type",
-            "Hospital Ownership",
-            "Hospital overall rating",
+            "avg_patient_experience",
+            "hcahps_measure_rows",
+            "avg_answer_percent",
+            "avg_completed_surveys",
+            "avg_response_rate",
         ],
-        "Hospital General Information",
     )
 
-    hospitals["Hospital overall rating numeric"] = hospitals[
-        "Hospital overall rating"
-    ].apply(clean_rating)
-
-    hospitals["State"] = hospitals["State"].str.strip()
-    hospitals["Hospital Type"] = hospitals["Hospital Type"].str.strip()
-    hospitals["Hospital Ownership"] = hospitals["Hospital Ownership"].str.strip()
-
-    if "City/Town" in hospitals.columns:
-        hospitals["City/Town"] = hospitals["City/Town"].str.strip()
-
-    hcahps = pd.DataFrame()
-
-    if HCAHPS_PATH.exists():
-        hcahps = load_csv(HCAHPS_PATH)
-        hcahps.columns = hcahps.columns.str.strip()
-
-        if "Patient Survey Star Rating" in hcahps.columns:
-            hcahps["Patient Survey Star Rating Numeric"] = hcahps[
-                "Patient Survey Star Rating"
-            ].apply(clean_rating)
-
-        if "HCAHPS Answer Percent" in hcahps.columns:
-            hcahps["HCAHPS Answer Percent Numeric"] = hcahps[
-                "HCAHPS Answer Percent"
-            ].apply(clean_percent)
-
-        if "Number of Completed Surveys" in hcahps.columns:
-            hcahps["Number of Completed Surveys Numeric"] = hcahps[
-                "Number of Completed Surveys"
-            ].apply(clean_number)
-
-        if "Survey Response Rate Percent" in hcahps.columns:
-            hcahps["Survey Response Rate Percent Numeric"] = hcahps[
-                "Survey Response Rate Percent"
-            ].apply(clean_percent)
-
-        if "State" in hcahps.columns:
-            hcahps["State"] = hcahps["State"].str.strip()
-
-    unplanned = pd.DataFrame()
-
-    if UNPLANNED_VISITS_PATH.exists():
-        unplanned = load_csv(UNPLANNED_VISITS_PATH)
-        unplanned.columns = unplanned.columns.str.strip()
-
-        if "State" in unplanned.columns:
-            unplanned["State"] = unplanned["State"].str.strip()
-
-        if "Score" in unplanned.columns:
-            unplanned["Score Numeric"] = unplanned["Score"].apply(clean_number)
-
-        for numeric_col in [
-            "Denominator",
-            "Number of Patients",
-            "Lower Estimate",
-            "Higher Estimate",
-        ]:
-            if numeric_col in unplanned.columns:
-                unplanned[f"{numeric_col} Numeric"] = unplanned[numeric_col].apply(
-                    clean_number
-                )
-
-        if "Measure Name" in unplanned.columns:
-            unplanned["Measure Group"] = unplanned["Measure Name"].apply(
-                classify_unplanned_measure
-            )
-
-        if "Compared to National" in unplanned.columns:
-            unplanned["Performance Category"] = unplanned[
-                "Compared to National"
-            ].apply(classify_compared_to_national)
-
-    return hospitals, hcahps, unplanned
-
-
-# -----------------------------
-# HCAHPS processing
-# -----------------------------
-
-def build_hcahps_facility_summary(hcahps: pd.DataFrame) -> pd.DataFrame:
-    if hcahps.empty:
-        return pd.DataFrame()
-
-    required = {
-        "Facility ID",
-        "Facility Name",
-        "State",
-        "Patient Survey Star Rating Numeric",
-    }
-
-    if not required.issubset(set(hcahps.columns)):
-        return pd.DataFrame()
-
-    rated = hcahps.dropna(subset=["Patient Survey Star Rating Numeric"]).copy()
-
-    if rated.empty:
-        return pd.DataFrame()
-
-    agg_dict = {
-        "avg_patient_experience": ("Patient Survey Star Rating Numeric", "mean"),
-        "hcahps_measure_rows": ("Patient Survey Star Rating Numeric", "count"),
-    }
-
-    if "HCAHPS Answer Percent Numeric" in rated.columns:
-        agg_dict["avg_answer_percent"] = ("HCAHPS Answer Percent Numeric", "mean")
-
-    if "Number of Completed Surveys Numeric" in rated.columns:
-        agg_dict["avg_completed_surveys"] = (
+    hcahps_measures = coerce_numeric_columns(
+        hcahps_measures,
+        [
+            "Patient Survey Star Rating Numeric",
+            "HCAHPS Answer Percent Numeric",
             "Number of Completed Surveys Numeric",
-            "mean",
-        )
-
-    if "Survey Response Rate Percent Numeric" in rated.columns:
-        agg_dict["avg_response_rate"] = (
             "Survey Response Rate Percent Numeric",
-            "mean",
-        )
-
-    facility_summary = (
-        rated.groupby(["Facility ID", "Facility Name", "State"], as_index=False)
-        .agg(**agg_dict)
-        .sort_values("avg_patient_experience", ascending=False)
+        ],
     )
 
-    return facility_summary
-
-
-# -----------------------------
-# Unplanned visits processing
-# -----------------------------
-
-def classify_unplanned_measure(measure_name):
-    if pd.isna(measure_name):
-        return "Unknown"
-
-    text = str(measure_name).lower()
-
-    if "readmission" in text:
-        return "Readmission"
-
-    if "return days" in text or "excess days" in text or "edac" in text:
-        return "Hospital Return Days / EDAC"
-
-    if "hospital visit" in text or "unplanned visit" in text:
-        return "Unplanned Visit"
-
-    return "Other Unplanned Visit Measure"
-
-
-def classify_compared_to_national(value):
-    if pd.isna(value):
-        return "Not Available"
-
-    text = str(value).strip().lower()
-
-    if text in {"", "not available", "not applicable", "nan"}:
-        return "Not Available"
-
-    if "worse" in text or "more" in text or "higher" in text:
-        return "Worse Than National"
-
-    if "better" in text or "fewer" in text or "lower" in text or "less" in text:
-        return "Better Than National"
-
-    if "no different" in text or "same" in text or "average" in text:
-        return "No Different Than National"
-
-    return str(value).strip()
-
-
-def build_unplanned_facility_summary(unplanned: pd.DataFrame) -> pd.DataFrame:
-    if unplanned.empty:
-        return pd.DataFrame()
-
-    required = {
-        "Facility ID",
-        "Facility Name",
-        "State",
-        "Performance Category",
-        "Measure Group",
-    }
-
-    if not required.issubset(set(unplanned.columns)):
-        return pd.DataFrame()
-
-    usable = unplanned.copy()
-
-    if usable.empty:
-        return pd.DataFrame()
-
-    usable["Worse Flag"] = usable["Performance Category"].eq("Worse Than National")
-    usable["Better Flag"] = usable["Performance Category"].eq("Better Than National")
-    usable["No Different Flag"] = usable["Performance Category"].eq(
-        "No Different Than National"
-    )
-    usable["Available Comparison Flag"] = ~usable["Performance Category"].eq(
-        "Not Available"
+    unplanned_facility_summary = coerce_numeric_columns(
+        unplanned_facility_summary,
+        [
+            "unplanned_measure_rows",
+            "available_unplanned_comparisons",
+            "worse_than_national_count",
+            "better_than_national_count",
+            "no_different_count",
+            "avg_unplanned_score",
+            "worse_than_national_rate",
+        ],
     )
 
-    agg_dict = {
-        "unplanned_measure_rows": ("Performance Category", "count"),
-        "available_unplanned_comparisons": ("Available Comparison Flag", "sum"),
-        "worse_than_national_count": ("Worse Flag", "sum"),
-        "better_than_national_count": ("Better Flag", "sum"),
-        "no_different_count": ("No Different Flag", "sum"),
-    }
-
-    if "Score Numeric" in usable.columns:
-        agg_dict["avg_unplanned_score"] = ("Score Numeric", "mean")
-
-    facility_summary = (
-        usable.groupby(["Facility ID", "Facility Name", "State"], as_index=False)
-        .agg(**agg_dict)
-        .sort_values("worse_than_national_count", ascending=False)
+    unplanned_measures = coerce_numeric_columns(
+        unplanned_measures,
+        [
+            "Score Numeric",
+            "Denominator Numeric",
+            "Number of Patients Numeric",
+        ],
     )
 
-    facility_summary["worse_than_national_rate"] = np.where(
-        facility_summary["available_unplanned_comparisons"] > 0,
-        facility_summary["worse_than_national_count"]
-        / facility_summary["available_unplanned_comparisons"],
-        np.nan,
+    return (
+        hospitals,
+        hcahps_facility_summary,
+        hcahps_measures,
+        unplanned_facility_summary,
+        unplanned_measures,
     )
-
-    return facility_summary
 
 
 # -----------------------------
@@ -456,8 +229,9 @@ def add_quality_flags(
         if not pd.isna(worse_count) and worse_count >= 1:
             row_flags.append("Worse-than-national unplanned visit/readmission measure")
 
-        if not pd.isna(worse_rate) and worse_rate >= 0.5 and worse_count >= 2:
-            row_flags.append("Multiple worse-than-national outcome measures")
+        if not pd.isna(worse_rate) and not pd.isna(worse_count):
+            if worse_rate >= 0.5 and worse_count >= 2:
+                row_flags.append("Multiple worse-than-national outcome measures")
 
         if not pd.isna(overall) and not pd.isna(patient):
             if overall >= 4 and patient <= 2.5:
@@ -545,9 +319,7 @@ def build_stakeholder_summary(
         low_rating_count = rated_hospitals[
             rated_hospitals["Hospital overall rating numeric"] <= 2
         ].shape[0]
-        low_rating_pct = (
-            low_rating_count / rated_count * 100 if rated_count else 0
-        )
+        low_rating_pct = low_rating_count / rated_count * 100 if rated_count else 0
 
         insights.append(
             f"The average overall hospital rating for the selected group is "
@@ -638,9 +410,13 @@ def build_stakeholder_summary(
 # Main app
 # -----------------------------
 
-hospitals, hcahps, unplanned = load_and_clean_data()
-hcahps_facility_summary = build_hcahps_facility_summary(hcahps)
-unplanned_facility_summary = build_unplanned_facility_summary(unplanned)
+(
+    hospitals,
+    hcahps_facility_summary,
+    hcahps_measures,
+    unplanned_facility_summary,
+    unplanned_measures,
+) = load_data()
 
 st.title("CMS Hospital Quality Dashboard")
 st.caption(
@@ -652,10 +428,9 @@ st.caption(
 with st.expander("Methodology and Data Quality Notes", expanded=False):
     st.write(
         """
-        **Data sources.** This dashboard uses public CMS hospital quality files stored locally
-        in the `data/raw/` folder. It analyzes Hospital General Information, HCAHPS patient
-        experience data, and Unplanned Hospital Visits provider-level data when those files
-        are available.
+        **Data sources.** This dashboard uses processed public CMS hospital quality files
+        generated from locally downloaded CMS raw datasets. The repository includes smaller
+        processed files for deployment, while the larger raw CSV files are excluded from GitHub.
 
         **Missing values.** CMS values such as "Not Available" and blank fields are converted
         to missing values for numeric analysis.
@@ -754,19 +529,21 @@ rated_hospitals = filtered_hospitals.dropna(
 
 filtered_facility_ids = set(filtered_hospitals["Facility ID"])
 
-if not hcahps_facility_summary.empty:
-    hcahps_filtered_facilities = hcahps_facility_summary[
-        hcahps_facility_summary["Facility ID"].isin(filtered_facility_ids)
-    ].copy()
-else:
-    hcahps_filtered_facilities = pd.DataFrame()
+hcahps_filtered_facilities = hcahps_facility_summary[
+    hcahps_facility_summary["Facility ID"].isin(filtered_facility_ids)
+].copy()
 
-if not unplanned_facility_summary.empty:
-    unplanned_filtered_facilities = unplanned_facility_summary[
-        unplanned_facility_summary["Facility ID"].isin(filtered_facility_ids)
-    ].copy()
-else:
-    unplanned_filtered_facilities = pd.DataFrame()
+hcahps_measure_view = hcahps_measures[
+    hcahps_measures["Facility ID"].isin(filtered_facility_ids)
+].copy()
+
+unplanned_filtered_facilities = unplanned_facility_summary[
+    unplanned_facility_summary["Facility ID"].isin(filtered_facility_ids)
+].copy()
+
+unplanned_view = unplanned_measures[
+    unplanned_measures["Facility ID"].isin(filtered_facility_ids)
+].copy()
 
 flagged_hospitals = add_quality_flags(
     filtered_hospitals,
@@ -808,19 +585,10 @@ col3.metric(
     "N/A" if np.isnan(avg_rating) else f"{avg_rating:.2f}",
 )
 
-if not unplanned_filtered_facilities.empty:
-    facilities_with_worse = unplanned_filtered_facilities[
-        unplanned_filtered_facilities["worse_than_national_count"] >= 1
-    ].shape[0]
-    col4.metric("Hospitals with worse outcome measure", f"{facilities_with_worse:,}")
-elif not hcahps_filtered_facilities.empty:
-    avg_patient_rating = hcahps_filtered_facilities[
-        "avg_patient_experience"
-    ].mean()
-    col4.metric("Avg. patient experience", f"{avg_patient_rating:.2f}")
-else:
-    five_star_count = rated_hospitals["Hospital overall rating numeric"].eq(5).sum()
-    col4.metric("5-star hospitals", f"{five_star_count:,}")
+facilities_with_worse = unplanned_filtered_facilities[
+    unplanned_filtered_facilities["worse_than_national_count"] >= 1
+].shape[0]
+col4.metric("Hospitals with worse outcome measure", f"{facilities_with_worse:,}")
 
 st.divider()
 
@@ -922,21 +690,7 @@ st.divider()
 
 st.subheader("Patient Experience Snapshot")
 
-if hcahps.empty:
-    st.info(
-        "HCAHPS patient experience data has not been loaded yet. To enable this "
-        "section, download the CMS HCAHPS Hospital CSV and save it as "
-        "`data/raw/HCAHPS_Hospital.csv`."
-    )
-elif hcahps_facility_summary.empty:
-    st.warning(
-        "The HCAHPS file loaded, but facility-level patient experience ratings "
-        "could not be calculated. Check that the file includes Facility ID, "
-        "Facility Name, State, and Patient Survey Star Rating columns."
-    )
-    with st.expander("Show HCAHPS columns found in this file"):
-        st.write(list(hcahps.columns))
-elif hcahps_filtered_facilities.empty:
+if hcahps_filtered_facilities.empty:
     st.info("No HCAHPS patient experience data match the selected filters.")
 else:
     patient_col1, patient_col2, patient_col3 = st.columns(3)
@@ -1031,37 +785,29 @@ else:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    if {
-        "HCAHPS Answer Description",
-        "Patient Survey Star Rating Numeric",
-    }.issubset(set(hcahps.columns)):
-        hcahps_measure_view = hcahps[
-            hcahps["Facility ID"].isin(filtered_facility_ids)
-        ].dropna(subset=["Patient Survey Star Rating Numeric"])
+    if not hcahps_measure_view.empty:
+        measure_summary = (
+            hcahps_measure_view.groupby("HCAHPS Answer Description", as_index=False)
+            .agg(
+                avg_star_rating=("Patient Survey Star Rating Numeric", "mean"),
+                hospital_count=("Facility ID", "nunique"),
+            )
+            .sort_values("avg_star_rating", ascending=False)
+        )
 
-        if not hcahps_measure_view.empty:
-            measure_summary = (
-                hcahps_measure_view.groupby("HCAHPS Answer Description", as_index=False)
-                .agg(
-                    avg_star_rating=("Patient Survey Star Rating Numeric", "mean"),
-                    hospital_count=("Facility ID", "nunique"),
-                )
-                .sort_values("avg_star_rating", ascending=False)
-            )
-
-            fig = px.bar(
-                measure_summary.head(15),
-                x="avg_star_rating",
-                y="HCAHPS Answer Description",
-                orientation="h",
-                hover_data=["hospital_count"],
-                title="Average Star Rating by HCAHPS Measure",
-            )
-            fig.update_layout(
-                xaxis_title="Average star rating",
-                yaxis_title="HCAHPS measure",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        fig = px.bar(
+            measure_summary.head(15),
+            x="avg_star_rating",
+            y="HCAHPS Answer Description",
+            orientation="h",
+            hover_data=["hospital_count"],
+            title="Average Star Rating by HCAHPS Measure",
+        )
+        fig.update_layout(
+            xaxis_title="Average star rating",
+            yaxis_title="HCAHPS measure",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
@@ -1071,21 +817,7 @@ st.divider()
 
 st.subheader("Unplanned Visits / Readmissions Snapshot")
 
-if unplanned.empty:
-    st.info(
-        "Unplanned Hospital Visits data has not been loaded yet. To enable this "
-        "section, download the CMS Unplanned Hospital Visits - Hospital CSV and "
-        "save it as `data/raw/Unplanned_Hospital_Visits_Hospital.csv`."
-    )
-elif unplanned_facility_summary.empty:
-    st.warning(
-        "The Unplanned Hospital Visits file loaded, but facility-level outcome "
-        "summaries could not be calculated. Check that the file includes Facility ID, "
-        "Facility Name, State, Measure Name, and Compared to National columns."
-    )
-    with st.expander("Show Unplanned Hospital Visits columns found in this file"):
-        st.write(list(unplanned.columns))
-elif unplanned_filtered_facilities.empty:
+if unplanned_filtered_facilities.empty:
     st.info("No unplanned visit/readmission data match the selected filters.")
 else:
     outcome_col1, outcome_col2, outcome_col3 = st.columns(3)
@@ -1110,8 +842,6 @@ else:
         "Worse-than-national rows",
         f"{total_worse_measures:,}",
     )
-
-    unplanned_view = unplanned[unplanned["Facility ID"].isin(filtered_facility_ids)].copy()
 
     if not unplanned_view.empty:
         st.write("### Compared to National Summary")
@@ -1348,5 +1078,5 @@ st.subheader("Future Enhancements")
 st.info(
     "Potential next steps include adding national benchmark tables, separating specific "
     "readmission conditions into focused analyses, adding HEDIS or CMS quality measure "
-    "context where available, and deploying the dashboard through Streamlit Community Cloud."
+    "context where available, and refining facility-level scoring methods."
 )
