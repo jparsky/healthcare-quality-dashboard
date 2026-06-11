@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .streamlit
-data/raw/
 data/processed/
 .DS_Store
+data/raw/
+data/processed/
