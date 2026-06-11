@@ -11,10 +11,7 @@ st.set_page_config(
 
 HOSPITAL_GENERAL_INFO_PATH = "data/raw/Hospital_General_Information.csv"
 
-HCAHPS_URL = (
-    "https://data.cms.gov/provider-data/sites/default/files/resources/"
-    "hospital/HCAHPS-Hospital.csv"
-)
+HCAHPS_PATH = "data/raw/HCAHPS_Hospital.csv"
 
 UNPLANNED_VISITS_URL = (
     "https://data.cms.gov/provider-data/sites/default/files/resources/"
@@ -44,12 +41,33 @@ def clean_rating(value):
         return float(text)
     except ValueError:
         return np.nan
+    
+    
+def clean_percent(value):
+    if pd.isna(value):
+        return np.nan
 
+    text = str(value).strip().replace("%", "")
+
+    if text.lower() in {
+        "not available",
+        "not applicable",
+        "not enough information",
+        "",
+    }:
+        return np.nan
+
+    try:
+        return float(text)
+    except ValueError:
+        return np.nan
 
 def load_and_clean_data():
     hospitals = load_csv(HOSPITAL_GENERAL_INFO_PATH)
+    hcahps = load_csv(HCAHPS_PATH)
 
     hospitals.columns = hospitals.columns.str.strip()
+    hcahps.columns = hcahps.columns.str.strip()
 
     hospitals["Hospital overall rating numeric"] = hospitals[
         "Hospital overall rating"
@@ -59,7 +77,20 @@ def load_and_clean_data():
     hospitals["Hospital Type"] = hospitals["Hospital Type"].str.strip()
     hospitals["Hospital Ownership"] = hospitals["Hospital Ownership"].str.strip()
 
-    return hospitals
+    if "Patient Survey Star Rating" in hcahps.columns:
+        hcahps["Patient Survey Star Rating Numeric"] = hcahps[
+            "Patient Survey Star Rating"
+        ].apply(clean_rating)
+
+    if "HCAHPS Answer Percent" in hcahps.columns:
+        hcahps["HCAHPS Answer Percent Numeric"] = hcahps[
+            "HCAHPS Answer Percent"
+        ].apply(clean_percent)
+
+    if "State" in hcahps.columns:
+        hcahps["State"] = hcahps["State"].str.strip()
+
+    return hospitals, hcahps
 
 
 def find_hcahps_summary(hcahps: pd.DataFrame) -> pd.DataFrame:
@@ -105,7 +136,7 @@ def find_readmission_rows(unplanned: pd.DataFrame) -> pd.DataFrame:
     return readmissions
 
 
-hospitals = load_and_clean_data()
+hospitals, hcahps = load_and_clean_data()
 #hcahps_summary = find_hcahps_summary(hcahps)
 #readmissions = find_readmission_rows(unplanned)
 
@@ -282,11 +313,145 @@ st.divider()
 
 st.subheader("Patient Experience Snapshot")
 
-st.info(
-    "Patient experience analysis will be added after loading the CMS HCAHPS "
-    "hospital survey dataset. This first version currently focuses on overall "
-    "hospital quality ratings from the Hospital General Information dataset."
-)
+required_hcahps_cols = {
+    "Facility ID",
+    "Facility Name",
+    "State",
+    "HCAHPS Measure ID",
+    "HCAHPS Answer Description",
+    "Patient Survey Star Rating Numeric",
+}
+
+missing_hcahps_cols = required_hcahps_cols - set(hcahps.columns)
+
+if missing_hcahps_cols:
+    st.warning(
+        "The HCAHPS file loaded, but some expected columns were not found: "
+        + ", ".join(sorted(missing_hcahps_cols))
+    )
+
+    with st.expander("Show HCAHPS columns found in this file"):
+        st.write(list(hcahps.columns))
+
+else:
+    hcahps_filtered = hcahps.copy()
+
+    if selected_states:
+        hcahps_filtered = hcahps_filtered[
+            hcahps_filtered["State"].isin(selected_states)
+        ]
+
+    # Keep rows that have a patient survey star rating.
+    hcahps_rated = hcahps_filtered.dropna(
+        subset=["Patient Survey Star Rating Numeric"]
+    )
+
+    if hcahps_rated.empty:
+        st.info("No HCAHPS patient survey star rating data match the selected filters.")
+    else:
+        col_a, col_b, col_c = st.columns(3)
+
+        avg_patient_rating = hcahps_rated[
+            "Patient Survey Star Rating Numeric"
+        ].mean()
+
+        unique_hospitals_hcahps = hcahps_rated["Facility ID"].nunique()
+
+        five_star_patient_count = (
+            hcahps_rated["Patient Survey Star Rating Numeric"].eq(5).sum()
+        )
+
+        col_a.metric(
+            "Avg. patient survey rating",
+            f"{avg_patient_rating:.2f}",
+        )
+        col_b.metric(
+            "Hospitals with HCAHPS ratings",
+            f"{unique_hospitals_hcahps:,}",
+        )
+        col_c.metric(
+            "5-star HCAHPS rows",
+            f"{five_star_patient_count:,}",
+        )
+
+        patient_exp_by_state = (
+            hcahps_rated.groupby("State", as_index=False)
+            .agg(
+                avg_patient_experience=(
+                    "Patient Survey Star Rating Numeric",
+                    "mean",
+                ),
+                hospital_count=("Facility ID", "nunique"),
+            )
+            .sort_values("avg_patient_experience", ascending=False)
+        )
+
+        fig = px.bar(
+            patient_exp_by_state,
+            x="State",
+            y="avg_patient_experience",
+            hover_data=["hospital_count"],
+            title="Average HCAHPS Patient Survey Star Rating by State",
+        )
+        fig.update_layout(
+            yaxis_title="Average patient survey star rating",
+            xaxis_title="State",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.write("### Patient Experience Measures")
+
+        measure_summary = (
+            hcahps_rated.groupby("HCAHPS Answer Description", as_index=False)
+            .agg(
+                avg_star_rating=(
+                    "Patient Survey Star Rating Numeric",
+                    "mean",
+                ),
+                hospital_count=("Facility ID", "nunique"),
+            )
+            .sort_values("avg_star_rating", ascending=False)
+        )
+
+        fig = px.bar(
+            measure_summary.head(15),
+            x="avg_star_rating",
+            y="HCAHPS Answer Description",
+            orientation="h",
+            hover_data=["hospital_count"],
+            title="Average Star Rating by HCAHPS Measure",
+        )
+        fig.update_layout(
+            xaxis_title="Average star rating",
+            yaxis_title="HCAHPS measure",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.write("### HCAHPS Detail Table")
+
+        hcahps_display_cols = [
+            col
+            for col in [
+                "Facility ID",
+                "Facility Name",
+                "State",
+                "HCAHPS Measure ID",
+                "HCAHPS Answer Description",
+                "Patient Survey Star Rating",
+                "HCAHPS Answer Percent",
+                "Number of Completed Surveys",
+                "Survey Response Rate Percent",
+                "Start Date",
+                "End Date",
+            ]
+            if col in hcahps_rated.columns
+        ]
+
+        st.dataframe(
+            hcahps_rated[hcahps_display_cols].head(1000),
+            use_container_width=True,
+            hide_index=True,
+        )
 st.divider()
 
 st.subheader("Unplanned Visits / Readmissions Data Preview")
